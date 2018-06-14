@@ -1,0 +1,117 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'net/ldap' #needs sudo gem install net-ldap
+
+# @param upi [String] UoA login name
+def get_name(upi)
+  filter = Net::LDAP::Filter.eq( "objectCategory","user" ) & Net::LDAP::Filter.eq("cn","#{upi}*")
+  @ldap.search( :base => @treebase, :filter => filter ) do |entry|
+    #group = entry.dn.split('=')[1].split(',')[0].gsub(/AUL/, '')
+    #puts "DN: #{group}"
+    entry.each do |attribute, values|
+      if attribute.to_s == 'sn' || attribute.to_s == 'givenname'
+        values.each do |value|
+          print "  #{value.to_s.strip}"
+        end
+      end
+    end
+    puts
+    return
+    #i += 1
+    #exit(0) if i == 10
+  end
+end
+
+# @param upi [String] UoA login name
+# @param attributes [Hash] keys are LDAP attributes, values are the Keys we want to use internally
+# @param conf [Hash] Config 
+# @return response [Hash] Our internal keys and their LDAP values
+def get_attributes2(upi:, attributes:, conf:)
+  response={}
+  @treebase = conf['base'] #"dc=UoA,dc=auckland,dc=ac,dc=nz"
+  filter = Net::LDAP::Filter.eq( "objectCategory","user" ) & Net::LDAP::Filter.eq("cn","#{upi}*")
+  attr_list = []
+  attributes.each { |k,v| attr_list << k }
+  @ldap.search( :base => @treebase, :filter => filter, :attributes => attr_list ) do |entry|
+    attributes.each do |attribute,value|
+      response[value] = entry[attribute][0].to_s.strip
+    end
+    return response #Only want the first entry
+  end
+end
+
+
+# @param group [String] LDAP lookup string, which can contain wildcards
+# @param conf [Hash] Config 
+# @param quiet [Boolean] Optional. Default true. If false, then prints debugging.
+# @return group_id [Array] Group name, group_id as a string.
+def get_group_id(group:, conf:, quiet: true)
+  group_id = []
+  filter = Net::LDAP::Filter.eq( "objectCategory","group" ) & Net::LDAP::Filter.eq("cn","#{group}*")
+  @treebase = conf['base'] #"dc=UoA,dc=auckland,dc=ac,dc=nz"
+  @ldap.search( :base => @treebase, :filter => filter ) do |entry|
+    group = entry.dn.split('=')[1].split(',')[0]
+    entry.each do |attribute, values|
+      values.each do |value|
+        puts "#{attribute} => #{value.to_s.strip}" if !quiet
+        if attribute.to_s == 'gidnumber'
+          group_id << "#{group} => #{values[0]}"
+        end
+      end
+    end
+  end
+  return group_id
+end
+
+# @param group [String] LDAP lookup string, which can contain wildcards
+# @param conf [Hash] Config 
+# @param quiet [Boolean] Optional. Default true. If false, then prints debugging.
+# @yield group,member [Array] For each member, yield the group name and members UPI
+def get_group_member_dev(group:, conf:, quiet: true)
+  filter = Net::LDAP::Filter.eq( "objectCategory","group" ) & Net::LDAP::Filter.eq("cn","#{group}*")
+  @treebase = conf['base'] #"dc=UoA,dc=auckland,dc=ac,dc=nz"
+
+  @ldap.search( :base => @treebase, :filter => filter ) do |entry|
+    group = entry.dn.split('=')[1].split(',')[0]
+    entry.each do |attribute, values|
+      if attribute.to_s == 'member'
+        values.each do |value|
+          puts "#{attribute} => #{value.to_s.strip}" if !quiet
+          member = value.split('=')[1].split(',')[0]
+          yield group, member
+        end
+      end
+    end
+    puts
+  end
+end
+
+conf = JSON.parse(File.read('conf.json'))
+
+begin
+
+  @ldap = Net::LDAP.new :host => conf['host'], # your LDAP host name or IP goes here,
+                        :port => "389",
+                        #:port => "636", :encryption => :simple_tls,  # your LDAP host port goes here
+                        :base => conf['base'], # the base of your AD tree goes here,
+                        :auth => {
+                          :method => :simple,
+                          :username => conf['username'], # a user w/sufficient privileges to read from AD goes here,
+                          :password => conf['password'] # the user's password goes here
+                        }
+
+  puts get_group_id(group: '*res123*', conf: conf)
+  puts
+  prev_g = ""
+  get_group_member_dev(group: '*res123*', conf: conf, quiet: true) do |g,m| 
+    if prev_g != g
+      puts "Group: #{g}"
+      prev_g = g
+    end
+    puts "    #{get_attributes2(upi: m, attributes: {'sn'=>'surname', 'givenname'=>'givenname', 'mail'=>'email', 'employeenumber'=>'id', 'cn'=>'upi'}, conf: conf)}"
+  end
+
+rescue Exception => e
+  puts e
+end
+
