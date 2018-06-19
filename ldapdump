@@ -86,7 +86,7 @@ def get_group_member_dev(group:, conf:, quiet: true)
   end
 end
 
-conf = JSON.parse(File.read('conf.json'))
+conf = JSON.parse(File.read('conf.json'))['dev']
 
 begin
 
